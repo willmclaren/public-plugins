@@ -25,9 +25,12 @@ no warnings 'uninitialized';
 use HTML::Entities qw(encode_entities);
 use Scalar::Util qw(weaken isweak);
 
+use base qw(EnsEMBL::Web::Factory);
+
 sub createObjects {
   my $self       = shift;
   my $variation  = shift;
+  my $hub        = $self->hub;
   my $identifier = $self->param('v') || $self->param('snp');
   
   my $db = $self->species_defs->databases->{'DATABASE_VARIATION'};
@@ -35,11 +38,11 @@ sub createObjects {
   return $self->problem('fatal', 'Database Error', 'There is no variation database for this species.') unless $db;
   
   if (!$variation) {
-    my $dbs = $self->hub->get_databases(qw(core variation));
+    my $core_db = $hub->database('core');
     
-    return $self->problem('fatal', 'Database Error', 'Could not connect to the core database.') unless $dbs;
+    return $self->problem('fatal', 'Database Error', 'Could not connect to the core database.') unless $core_db;
     
-    my $variation_db = $dbs->{'variation'};
+    my $variation_db = $self->hub->database('variation');
        $variation_db->include_non_significant_phenotype_associations(0);
   
     # find VCF config
@@ -53,29 +56,33 @@ sub createObjects {
 
     return $self->problem('fatal', 'Database Error', 'Could not connect to the variation database.') unless $variation_db;
     
-    $variation_db->dnadb($dbs->{'core'});
- 
-    if(!$identifier) {
-      my $vfid = $self->param('vf');
-      my $vf = $variation_db->get_VariationFeatureAdaptor->fetch_by_dbID($vfid);
-      if($vf) {
+    $variation_db->dnadb($core_db);
+
+
+    my $vfid = $self->param('vf'); 
+    my $vl = $self->param('vl');
+
+    if(!$identifier && $vfid) {
+      if(my $vf = $variation_db->get_VariationFeatureAdaptor->fetch_by_dbID($vfid)) {
         $identifier = $vf->variation_name;
         $self->param('v',$identifier);
+        $variation = $vf->variation;
       }
     }
-    return $self->problem('fatal', 'Variation ID required', $self->_help('A variation ID is required to build this page.')) unless $identifier;
- 
-    $variation = $variation_db->get_VariationAdaptor->fetch_by_name($identifier);
-  
-    my $vl = $self->param('vl');
+
+    if($identifier) {
+      $variation ||= $variation_db->get_VariationAdaptor->fetch_by_name($identifier);
+    }
+    elsif(!$vl) {
+      return $self->problem('fatal', 'Variation ID required', $self->_help('A variation ID is required to build this page.'));
+    }
   
     if(!$variation && $vl) {
     
       my $vfa = $variation_db->get_VariationFeatureAdaptor();
-      my $cdb = $dbs->{'core'};
     
-      if($cdb && $vfa) {
-        my $sa = $cdb->get_SliceAdaptor();
+      if($core_db && $vfa) {
+        my $sa = $core_db->get_SliceAdaptor();
       
         my ($c, $s, $e) = split(/\:|\-/, $vl);
         my $slice = $sa->fetch_by_region(undef, $c, $s, $e || $s);
